@@ -385,6 +385,11 @@ class TranscriptRenderer {
   /** Cache-hit and context-window facts from the latest request. */
   private lastCacheRead = 0
   private lastBilledInput = 0
+  /** Tools whose call has not yet produced a result, keyed by callId. */
+  private runningTools = new Map<string, string>()
+  /** Recent text-delta events feeding the streaming TPS estimate. */
+  private chunkWindow: Array<{ time: number; chars: number }> = []
+  private lastFooterRefresh = 0
 
   constructor(
     private readonly transcript: TranscriptContent,
@@ -406,6 +411,8 @@ class TranscriptRenderer {
     this.totalReasoning = 0
     this.lastCacheRead = 0
     this.lastBilledInput = 0
+    this.runningTools.clear()
+    this.chunkWindow = []
     this.sessionId = sessionId
   }
 
@@ -420,19 +427,48 @@ class TranscriptRenderer {
     }
   }
 
-  /** Rewrite the two-line footer from the cumulative totals + current model. */
+  /** Rewrite the footer from cumulative totals, live activity, and the model. */
   refreshFooter(): void {
     const model = this.getModel()
     const effort = model.reasoningEffort !== undefined ? ` • ${model.reasoningEffort}` : ''
-    const parts = [`↑${formatTokens(this.totalInput)}`, `↓${formatTokens(this.totalOutput)}`]
-    if (this.totalReasoning > 0) parts.push(`R${formatTokens(this.totalReasoning)}`)
+    const segments: string[] = []
+    // Usage (dim).
+    const usageParts = [`↑${formatTokens(this.totalInput)}`, `↓${formatTokens(this.totalOutput)}`]
+    if (this.totalReasoning > 0) usageParts.push(`R${formatTokens(this.totalReasoning)}`)
+    if (this.lastBilledInput > 0) usageParts.push(`CH${(this.lastCacheRead / this.lastBilledInput * 100).toFixed(1)}%`)
+    segments.push(this.pal.dim(usageParts.join(' ')))
+    // Context-window occupancy (warning/error as it crosses 80% / 95%).
     if (this.lastBilledInput > 0) {
-      parts.push(`CH${(this.lastCacheRead / this.lastBilledInput * 100).toFixed(1)}%`)
       const window = this.getContextWindow()
-      if (window > 0) parts.push(`${(this.lastBilledInput / window * 100).toFixed(1)}%/${formatTokens(window)}`)
+      if (window > 0) {
+        const pct = this.lastBilledInput / window * 100
+        const pctText = `${pct.toFixed(1)}%/${formatTokens(window)}`
+        segments.push(pct >= 95 ? this.pal.error(pctText) : pct >= 80 ? this.pal.warning(pctText) : this.pal.dim(pctText))
+      }
     }
-    const right = `(${model.provider}) ${model.model}${effort}${this.getPlanActive() ? ' · plan' : ''}`
-    this.footer.setText(this.pal.dim(`${this.cwdLabel}\n${parts.join(' ')}  ·  ${right}\n${this.sessionId}`))
+    // Live activity (accent): running tools and streaming TPS.
+    const activityParts: string[] = []
+    if (this.runningTools.size > 0) activityParts.push(`⚙ ${[...this.runningTools.values()].join(' · ')}`)
+    const tps = this.currentTps()
+    if (tps > 0) activityParts.push(`${tps.toFixed(0)}t/s`)
+    if (activityParts.length > 0) segments.push(this.pal.accent(activityParts.join(' ')))
+    // Model route (dim).
+    segments.push(this.pal.dim(`(${model.provider}) ${model.model}${effort}${this.getPlanActive() ? ' · plan' : ''}`))
+    const line2 = segments.filter(segment => segment !== '').join('  ')
+    this.footer.setText(`${this.pal.dim(this.cwdLabel)}\n${line2}\n${this.pal.dim(this.sessionId)}`)
+  }
+
+  /** Streaming tokens-per-second estimate from the last 2s of text deltas. */
+  private currentTps(): number {
+    if (this.chunkWindow.length < 2) return 0
+    const first = this.chunkWindow[0]
+    const last = this.chunkWindow[this.chunkWindow.length - 1]
+    if (first === undefined || last === undefined) return 0
+    const span = last.time - first.time
+    if (span <= 0) return 0
+    let chars = 0
+    for (const entry of this.chunkWindow) chars += entry.chars
+    return (chars / 4) / (span / 1000)
   }
 
   private stepKey(turn: number, step: number): string {
@@ -457,6 +493,14 @@ class TranscriptRenderer {
       this.transcript.finalizeThinking()
       this.transcript.appendText(chunk.text)
       this.streamed.add(key)
+      // Feed the streaming TPS window and refresh the footer on a throttle.
+      this.chunkWindow.push({ time: event.time, chars: chunk.text.length })
+      const cutoff = event.time - 2000
+      while (this.chunkWindow.length > 0 && (this.chunkWindow[0]?.time ?? 0) < cutoff) this.chunkWindow.shift()
+      if (event.time - this.lastFooterRefresh >= 300) {
+        this.lastFooterRefresh = event.time
+        this.refreshFooter()
+      }
     } else if (chunk.type === 'reasoning-delta' && chunk.text !== '') {
       this.transcript.appendThinking(chunk.text)
       this.reasoned.add(key)
@@ -497,14 +541,18 @@ class TranscriptRenderer {
   }
 
   private onToolCall(event: SessionEvent<'tool/call'>): void {
-    const { name, arguments: raw } = event.data
+    const { name, arguments: raw, callId } = event.data
+    this.runningTools.set(String(callId), name)
     this.transcript.appendToolCall(name, summarizeToolArguments(raw))
+    this.refreshFooter()
   }
 
   private onToolResult(event: SessionEvent<'tool/result'>): void {
     const { message, error } = event.data
+    this.runningTools.delete(String(message.source.callId))
     if (error !== undefined) {
       this.transcript.appendText(`\n\n> [error: ${error.code}]\n\n`)
+      this.refreshFooter()
       return
     }
     const lines: string[] = []
@@ -518,6 +566,7 @@ class TranscriptRenderer {
   }
 
   private onTurnEnd(event: SessionEvent<'turn/end'>): void {
+    this.runningTools.clear()
     const { reason } = event.data
     if (reason.kind === 'error') {
       this.transcript.appendText(`\n\n> [error: ${reason.error.code}]\n\n`)
