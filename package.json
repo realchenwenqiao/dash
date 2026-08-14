@@ -30,6 +30,9 @@
     "build": "tsc -p tsconfig.json",
     "smoke": "node --import tsx/esm scripts/smoke.ts"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
