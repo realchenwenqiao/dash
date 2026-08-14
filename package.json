@@ -1,6 +1,6 @@
 {
   "name": "@realchenwenqiao/dash",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DASH — a pi-tui terminal front door for DeepSeek Harness agents, installed as a dsh bundle plugin",
   "license": "MIT",
   "type": "module",
