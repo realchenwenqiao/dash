@@ -76,6 +76,19 @@ function deriveKeyRef(provider: string): string {
   return `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`
 }
 
+/** Resolve the `fd`/`fdfind` binary for fuzzy `@` file completion, or null. */
+function findFdPath(): string | null {
+  try {
+    const path = execSync('command -v fd || command -v fdfind', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    }).toString().trim()
+    return path === '' ? null : path
+  } catch {
+    return null
+  }
+}
+
 /** Working directory (home abbreviated as ~) plus the git branch when present. */
 function cwdLabel(): string {
   const cwd = process.cwd()
@@ -699,7 +712,7 @@ async function run(ctx: Context, exit: (code: number) => void): Promise<void> {
     description: command.description,
     ...(command.input === undefined ? {} : { argumentHint: command.input.hint }),
   }))
-  editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...TUI_COMMANDS, ...hostCommands], process.cwd()))
+  editor.setAutocompleteProvider(new CombinedAutocompleteProvider([...TUI_COMMANDS, ...hostCommands], process.cwd(), findFdPath()))
 
   // The ENTIRE surface — banner, hint, transcript, editor, footer — forms one
   // scrollable content stream. Nothing is pinned: scrolling pushes the logo
