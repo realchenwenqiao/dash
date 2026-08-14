@@ -31,7 +31,9 @@
 - **Tool cards** with argument summaries; output is collapsed until expanded.
 - **Session resume** — `/resume` opens a picker (in the input area) over saved sessions; `dash tui --resume <id>` restores one directly.
 - **Rewind (time-travel fork)** — double-`Esc` opens a **behavior ledger** in the input area: one row per user message, tool call, and assistant reply, each tagged `[user]`/`[tool]`/`[assistant]` with its turn number and measured duration. Selecting a row forks back to that turn's boundary — a non-destructive branch, not an undo stack.
-- **Token / cache-hit / context footer** with cumulative counters.
+- **Live activity footer** — cumulative tokens · streaming TPS (`64t/s`) · context occupancy warning (yellow ≥80%, red ≥95%) · running tools (`⚙ name`).
+- **`@` file completion** — type `@` + a path prefix for fuzzy file suggestions via `fd`/`fdfind`.
+- **Mouse select-to-copy** — drag to select text and release to copy (OSC 52); double-click a word, triple-click a line, wheel to scroll.
 
 ## What we inherited from dsh
 
@@ -117,6 +119,8 @@ Type a prompt and press Enter. The session streams the reply and any tool activi
 | `Shift+Tab` | Toggle plan mode |
 | `Esc` `Esc` | Open the rewind ledger (fork back to a previous turn) |
 | `Ctrl+C` | Cancel an open menu; quit when nothing is open |
+
+**Mouse**: drag to select & copy · double-click word · triple-click line · wheel to scroll.
 
 ## Color card
 
